@@ -3,20 +3,30 @@ import os, sys, argparse, random, re, subprocess, docker, tarfile
 client = docker.from_env()
 #############################################################################
 def copy_to(src, dst,tar=True):
-    name, dst = dst.split(':')
+    to_container=True
+    if(":" in dst):
+        name, dst = dst.split(':')
+        to_container=True
+    elif(":" in src):
+        name, src = src.split(':')
+        to_container=False
+    else:
+        return(None)
     container = client.containers.get(name)
-    os.chdir(os.path.dirname(src))
-    srcname = os.path.basename(src)
-    if(tar):
-        tar = tarfile.open(src + '.tar', mode='w')
-        try:
-            tar.add(srcname)
-        finally:
-            tar.close()
-        data = open(src + '.tar', 'rb').read()
+    if(to_container):
+        os.chdir(os.path.dirname(src))
+        filename = os.path.basename(src)
+        data = open(filename, 'rb').read()
         container.put_archive(os.path.dirname(dst), data)
     else:
-        pass
+        os.chdir(os.path.dirname(dst))
+        filename = os.path.basename(dst)
+        f = open(filename+"tar", 'wb')
+        bits, stat = container.get_archive(filename)
+        for chunk in bits:
+            f.write(chunk)
+        f.close()
+
 #############################################################################
 def parse_args():
     parser = argparse.ArgumentParser(description="Create Dockerfile from image")
@@ -49,6 +59,7 @@ args=parse_args()
 args.image='openvswitch/ovs:2.12.0_debian_4.15.0-66-generic'
 args.runcmd="-itd --net=host"
 args.internalcmd="ovsdb-server"
+DOCKER_CMD="sudo docker run %s --name=tempContainer %s %s" %(args.runcmd,IMAGEID,args.internalcmd)
 
 IMAGEID=exec_cmd("sudo docker images %s --format=\"{{.ID}}\"" % args.image)
 DOCKER_FILE=args.outputpath+"/Dockerfile"
@@ -59,19 +70,18 @@ os.system("mkdir -p %s"%args.outputpath)
 os.system("mkdir -p %s"%args.outputpath+"/files")
 os.system("bash DockerFileCreator.sh %s %s"%(IMAGEID,DOCKER_FILE))
 ##########################################
-DOCKER_CMD="sudo docker run %s --name=tempContainer %s %s" %(args.runcmd,IMAGEID,args.internalcmd)
-
-hashed_key = subprocess.check_output("grep 'file:' %s"%DOCKER_FILE, shell=True)
-hashed_key = []
+hashed_key = {}
 with open(DOCKER_FILE) as myfile:
-    for line in myfile.readlines():
-        if re.search(r'file:', line):
-            hashed_key.append(line.strip().split())
+    lines=[line for line in myfile.readlines()]
+for i,line in enumerate(lines):
+    if re.search(r'file:', line):
+        hashed_key[i]=line.strip().split()
 ##########################################
-for stmt in hashed_key:
+for k in list(hashed_key.keys()):
+    stmt=hashed_key[k]
     if(stmt[0]=="COPY"):
         dest=stmt[3]
-        copy_to(os.getcwd()+"/"+args.outputpath+"/files/"+dest, "tempContainer:"+dest)
+        copy_to("tempContainer:"+dest,os.getcwd()+"/"+args.outputpath+"/files"+dest)
         pass
     elif(stmt[0]=="ADD"):
         pass
